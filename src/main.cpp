@@ -17,6 +17,12 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 #define BUZZER_CHANNEL 0
 #define TamEEPROM 64
 
+enum SensorState
+{
+  WAIT_FIRST_EDGE,
+  WAIT_NEXT_EDGE
+};
+
 typedef struct
 {
   int PIN;
@@ -108,12 +114,12 @@ void setup()
   Serial.println(quantPremios);
 
   pinMode(s1.PIN, INPUT);
-  // pinMode(s2.PIN, INPUT);
+  pinMode(s2.PIN, INPUT);
 
   xStringDisplayMutex = xSemaphoreCreateMutex();
 
   xTaskCreate(vSensor, "Sensor 1", 2048, &s1, 1, NULL);
-  // xTaskCreate(vSensor,"Sensor 2", 2048, &s2, 1, NULL);
+  xTaskCreate(vSensor, "Sensor 2", 2048, &s2, 1, NULL);
   xTaskCreate(vEscreve, "Escreve", 2048, NULL, 1, &xEscreve);
   xTaskCreate(vDisplay, "Display", 2048, NULL, 1, &xDisplay);
   xTaskCreate(vBuzzer, "Buzzer", 2048, NULL, 1, &xBuzzer);
@@ -128,19 +134,70 @@ void vSensor(void *pvParameters)
 {
   SensorLDR *s = (SensorLDR *)pvParameters;
 
+  const TickType_t minPeriod = pdMS_TO_TICKS(15);
+  const TickType_t maxPeriod = pdMS_TO_TICKS(25);
+
+  const int edgesNeeded = 5;
+
+  SensorState state = WAIT_FIRST_EDGE;
+  bool lastVal = digitalRead(s->PIN);
+
+  TickType_t lastEdgeTick = 0;
   TickType_t lastTriggerTick = 0;
+
+  int edgeCount = 0;
+
   while (1)
   {
-    if ((xTaskGetTickCount() - lastTriggerTick) > cooldownTicks)
+    TickType_t now = xTaskGetTickCount();
+    bool val = digitalRead(s->PIN);
+
+    switch (state)
     {
-      if (digitalRead(s->PIN) == LOW)
+    case WAIT_FIRST_EDGE:
+      if ((now - lastTriggerTick) > cooldownTicks && lastVal == HIGH && val == LOW)
       {
-        lastTriggerTick = xTaskGetTickCount();
-        xTaskNotify(xEscreve, s->awardValue, eSetValueWithOverwrite);
-        xTaskNotifyGive(xBuzzer);
+        //Serial.printf("Detectou primeira borda\n");
+        lastEdgeTick = now;
+        edgeCount = 1;
+        state = WAIT_NEXT_EDGE;
       }
+      break;
+    case WAIT_NEXT_EDGE:
+      if (val != lastVal)
+      {
+        TickType_t dt = now - lastEdgeTick;
+
+        if (dt >= minPeriod && dt <= maxPeriod)
+        {
+          edgeCount++;
+          //Serial.printf("Borda %d, intervalo = %u ms\n", edgeCount, pdTICKS_TO_MS(dt));
+
+          if (edgeCount >= edgesNeeded)
+          {
+            Serial.println("Tiro detectado");
+            lastTriggerTick = now;
+            xTaskNotify(xEscreve, s->awardValue, eSetValueWithOverwrite);
+            xTaskNotifyGive(xBuzzer);
+            edgeCount = 0;
+            state = WAIT_FIRST_EDGE;
+          }
+
+          lastEdgeTick = now;
+        }
+        else
+        {
+          //Serial.printf("Intervalo invalido: %u ms\n", pdTICKS_TO_MS(dt));
+          edgeCount = 0;
+          state = WAIT_FIRST_EDGE;
+        }
+      }
+      break;
     }
-    vTaskDelay(pdMS_TO_TICKS(2));
+
+    lastVal = val;
+
+    vTaskDelay(pdMS_TO_TICKS(1));
   }
 }
 
@@ -236,7 +293,7 @@ void vDisplay(void *pvParameters)
     pos++;
     lcd.setCursor(0, 1);
     lcd.print("Premios: " + String(quantPremios));
-    if (pos == stringDisplay.size()/2)
+    if (pos == stringDisplay.size() / 2)
       pos = 0;
 
     vTaskDelay(pdMS_TO_TICKS(300));
