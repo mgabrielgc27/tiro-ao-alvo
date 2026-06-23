@@ -12,7 +12,9 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 // Pinos
 #define SENSOR1 25
 #define SENSOR2 26
+#define SENSOR3 14
 #define BUZZER 32
+#define RESET GPIO_NUM_0
 
 #define BUZZER_CHANNEL 0
 #define TamEEPROM 64
@@ -31,6 +33,7 @@ typedef struct
 
 SensorLDR s1 = {SENSOR1, 0};
 SensorLDR s2 = {SENSOR2, 1};
+SensorLDR s3 = {SENSOR3, 2};
 
 uint8_t peerAddress[] = {
     0xD8, 0x13, 0x2A, 0x74, 0x28, 0xBC};
@@ -52,11 +55,15 @@ TaskHandle_t xEscreve;
 TaskHandle_t xDisplay;
 // Task que toca a melodia
 TaskHandle_t xBuzzer;
+// Task que reseta o sistema
+TaskHandle_t xReset;
 
 void vSensor(void *pvParameters);
 void vEscreve(void *pvParameters);
 void vDisplay(void *pvParameters);
 void vBuzzer(void *pvParameters);
+void vReset(void *pvParameters);
+void IRAM_ATTR botao_reset_handler(void *arg);
 
 void OnDataRecv(const uint8_t *mac, const uint8_t *data, int len);
 
@@ -66,6 +73,21 @@ void setup()
 
   // MAC ARMA D8:13:2A:74:28:BC
   // MAC BARRACA D4:E9:F4:BC:8E:A4
+
+  //configurando interrupção
+  gpio_config_t io_reset_conf = {
+        .pin_bit_mask = (1ULL << RESET),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE   // interrupção na borda de descida
+    };
+
+    gpio_config(&io_reset_conf);
+
+    gpio_install_isr_service(0);
+
+    gpio_isr_handler_add(RESET, botao_reset_handler, NULL);
 
   WiFi.mode(WIFI_STA);
   if (esp_now_init() != ESP_OK)
@@ -115,14 +137,17 @@ void setup()
 
   pinMode(s1.PIN, INPUT);
   pinMode(s2.PIN, INPUT);
+  pinMode(s3.PIN, INPUT);
 
   xStringDisplayMutex = xSemaphoreCreateMutex();
 
   xTaskCreate(vSensor, "Sensor 1", 2048, &s1, 1, NULL);
   xTaskCreate(vSensor, "Sensor 2", 2048, &s2, 1, NULL);
+  xTaskCreate(vSensor, "Sensor 3", 2048, &s3, 1, NULL);
   xTaskCreate(vEscreve, "Escreve", 2048, NULL, 1, &xEscreve);
   xTaskCreate(vDisplay, "Display", 2048, NULL, 1, &xDisplay);
   xTaskCreate(vBuzzer, "Buzzer", 2048, NULL, 1, &xBuzzer);
+  xTaskCreate(vReset, "Reset", 2048, NULL,1, &xReset);
 }
 
 void loop()
@@ -200,39 +225,46 @@ void vSensor(void *pvParameters)
     vTaskDelay(pdMS_TO_TICKS(1));
   }
 }
+// variável para pausa quando fizer 3 acertos
+int stop = 0;
 
 std::string StringBuffer(uint32_t valor)
 {
+  stop = 0;
   char temp[32];
   std::string buffer = "  GANHOU ";
 
-  switch (valor)
+  if (quant1 + quant2 + quant3 >= 3)
   {
-  case 0:
-    quant1++;
-    break;
-  case 1:
-    quant2++;
-    break;
-  case 2:
-    quant3++;
-    break;
+   stop = 1;
   }
-
-  if (quant1 + quant2 + quant3 == 3)
+  
+  if (valor == 3)
   {
-    const char msg[] = "RECARREGAR";
-    esp_err_t result = esp_now_send(
-        peerAddress,
-        (uint8_t *)msg,
-        strlen(msg) + 1);
-
-    if (result == ESP_OK)
-      Serial.println("Mensagem RECARREGAR enviada");
-    else
-      Serial.println("Erro ao enviar RECARREGAR");
+    buffer = "Inicar!!!";
   }
+  
 
+  if (stop != 1)
+  {
+    switch (valor)
+    {
+    case 0:
+      quant1++;
+      break;
+    case 1:
+      quant2++;
+      break;
+    case 2:
+      quant3++;
+      break;
+    }
+  }
+  
+
+  
+
+  
   if (quant1 > 0)
   {
     snprintf(temp, sizeof(temp), "%d XILITO ", quant1);
@@ -248,6 +280,8 @@ std::string StringBuffer(uint32_t valor)
     snprintf(temp, sizeof(temp), "%d CHICLETE ", quant3);
     buffer += temp;
   }
+  
+
   return buffer;
 }
 
@@ -260,9 +294,15 @@ void vEscreve(void *pvParameters)
     std::string buffer = StringBuffer(valor);
     xSemaphoreTake(xStringDisplayMutex, portMAX_DELAY);
     stringDisplay = buffer;
-    stringDisplay += stringDisplay;
+
+    if (valor < 3)
+    {
+      stringDisplay += stringDisplay;
+    }
+    
+
     xSemaphoreGive(xStringDisplayMutex);
-    if (quantPremios > 0)
+    if (quantPremios > 0 and stop == 0)
       quantPremios -= 1;
     EEPROM.writeInt(0, quantPremios);
     EEPROM.commit();
@@ -331,5 +371,27 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *data, int len)
   if (strcmp((char *)data, "ACABOU_MUNICAO") == 0)
   {
     Serial.println("Acabou a munição da arma");
+  }
+}
+//interrupção para ativar o Reset
+void IRAM_ATTR botao_reset_handler(void *arg){
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  vTaskNotifyGiveFromISR(xReset, &xHigherPriorityTaskWoken);
+
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+uint8_t msg = 1;
+
+void vReset( void *pvParameters){
+  while (true)
+  { 
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // resetando quantidade de cada premio
+    quant1 = 0, quant2 = 0, quant3 = 0;
+    xTaskNotify(xEscreve, 3, eSetValueWithoutOverwrite);
+    Serial.println("Resetou");
+    esp_now_send(peerAddress, (uint8_t*)&msg, sizeof(msg));
   }
 }
