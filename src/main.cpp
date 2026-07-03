@@ -12,7 +12,6 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 // Pinos
 #define SENSOR1 25
 #define SENSOR2 26
-#define SENSOR3 14
 #define BUZZER 32
 #define RESET GPIO_NUM_0
 
@@ -33,7 +32,6 @@ typedef struct
 
 SensorLDR s1 = {SENSOR1, 0};
 SensorLDR s2 = {SENSOR2, 1};
-SensorLDR s3 = {SENSOR3, 2};
 
 uint8_t peerAddress[] = {
     0xD8, 0x13, 0x2A, 0x74, 0x28, 0xBC};
@@ -137,13 +135,11 @@ void setup()
 
   pinMode(s1.PIN, INPUT);
   pinMode(s2.PIN, INPUT);
-  pinMode(s3.PIN, INPUT);
 
   xStringDisplayMutex = xSemaphoreCreateMutex();
 
   xTaskCreate(vSensor, "Sensor 1", 2048, &s1, 0, NULL);
   xTaskCreate(vSensor, "Sensor 2", 2048, &s2, 0, NULL);
-  xTaskCreate(vSensor, "Sensor 3", 2048, &s3, 0, NULL);
   xTaskCreate(vEscreve, "Escreve", 2048, NULL, 1, &xEscreve);
   xTaskCreate(vDisplay, "Display", 2048, NULL, 1, &xDisplay);
   xTaskCreate(vBuzzer, "Buzzer", 2048, NULL, 1, &xBuzzer);
