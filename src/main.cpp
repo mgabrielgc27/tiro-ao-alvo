@@ -141,9 +141,9 @@ void setup()
 
   xStringDisplayMutex = xSemaphoreCreateMutex();
 
-  xTaskCreate(vSensor, "Sensor 1", 2048, &s1, 1, NULL);
-  xTaskCreate(vSensor, "Sensor 2", 2048, &s2, 1, NULL);
-  xTaskCreate(vSensor, "Sensor 3", 2048, &s3, 1, NULL);
+  xTaskCreate(vSensor, "Sensor 1", 2048, &s1, 0, NULL);
+  xTaskCreate(vSensor, "Sensor 2", 2048, &s2, 0, NULL);
+  xTaskCreate(vSensor, "Sensor 3", 2048, &s3, 0, NULL);
   xTaskCreate(vEscreve, "Escreve", 2048, NULL, 1, &xEscreve);
   xTaskCreate(vDisplay, "Display", 2048, NULL, 1, &xDisplay);
   xTaskCreate(vBuzzer, "Buzzer", 2048, NULL, 1, &xBuzzer);
